@@ -1,6 +1,7 @@
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
-use std::{collections::HashMap, io::Write, ops::MulAssign};
+use std::ops::Mul;
+use std::{collections::HashMap, io::Write};
 
 fn main() {
     let mut funcs: HashMap<&'static str, fn(u128) -> u128> = HashMap::new();
@@ -95,34 +96,75 @@ fn fib_st_linear(mut n: u128) -> u128 {
 #[derive(Clone, Copy)]
 struct Matrix2x2(u128, u128, u128, u128);
 
-impl MulAssign<Matrix2x2> for Matrix2x2 {
-    fn mul_assign(&mut self, rhs: Matrix2x2) {
-        self.0 = self.0 * rhs.0 + self.1 * rhs.2;
-        self.1 = self.0 * rhs.1 + self.1 * rhs.3;
-        self.2 = self.2 * rhs.0 + self.3 * rhs.2;
-        self.3 = self.2 * rhs.1 + self.3 * rhs.3;
+impl Mul for Matrix2x2 { // mulassign bad
+    type Output = Matrix2x2;
+    fn mul(self, rhs: Self) -> Self::Output {
+        let a = self.0 * rhs.0 + self.1 * rhs.2;
+        let b = self.0 * rhs.1 + self.1 * rhs.3;
+        let c = self.2 * rhs.0 + self.3 * rhs.2;
+        let d = self.2 * rhs.1 + self.3 * rhs.3;
+        Matrix2x2(a,b,c,d)
     }
 }
 
 fn fib_st_matrix(mut n: u128) -> u128 {
-    let mut fib = Matrix2x2(0, 1, 1, 1);
-    let step = fib.clone();
+    if n == 0 {
+        return 0;
+    }
+    let step = Matrix2x2(0,1,1,1);
+    let mut fib = Matrix2x2(0,1,1,1);
     while n > 0 {
         n -= 1;
-        fib *= step;
+        fib = fib * step;
     }
-    return fib.0;
+    fib.0
 }
 
 fn fib_st_matrix_expo(mut n: u128) -> u128 {
-    let mut fib = Matrix2x2(0, 1, 1, 1);
-    let mut step = fib.clone();
+    if n == 0 {
+        return 0;
+    }
+    let mut fib = Matrix2x2(1, 0, 0, 1); // cpp implementation doesn't produce it correctly so here's my changes i guess
+    let mut step = Matrix2x2(1, 1, 1, 0);
+    n -= 1;
     while n > 0 {
         if (n & 1) != 0 {
-            fib *= step;
+            fib = fib * step;
         }
-        step *= step;
+        step = step * step;
         n >>= 1;
     }
     fib.0
+}
+#[cfg(test)]
+mod tests {
+    use crate::{fib_st_linear, fib_st_matrix, fib_st_matrix_expo, fib_st_memo, fib_st_normal};
+
+    const FIB: u128 = 40;
+    const TARGET_VALUE: u128 = 102334155;
+
+    #[test]
+    fn test_normal() {
+        assert_eq!(fib_st_normal(FIB), TARGET_VALUE)
+    }
+
+    #[test]
+    fn test_memo() {
+        assert_eq!(fib_st_memo(FIB), TARGET_VALUE)
+    }
+
+    #[test]
+    fn test_linear() {
+        assert_eq!(fib_st_linear(FIB), TARGET_VALUE)
+    }
+
+    #[test]
+    fn test_matrix() {
+        assert_eq!(fib_st_matrix(FIB), TARGET_VALUE)
+    }
+
+    #[test]
+    fn test_matrix_expo() {
+        assert_eq!(fib_st_matrix_expo(FIB), TARGET_VALUE)
+    }
 }
