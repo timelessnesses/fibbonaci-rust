@@ -5,11 +5,11 @@ use std::ops::Mul;
 use std::{collections::HashMap, io::Write};
 fn main() {
     let mut funcs: HashMap<&'static str, fn(u64) -> u64> = HashMap::new();
-    funcs.insert("test_singlthreaded_normal", fib_st_normal);
-    funcs.insert("test_singlethreaded_memo", fib_st_memo);
-    funcs.insert("test_singlethreaded_linear", fib_st_linear);
-    funcs.insert("test_singlethreaded_matrix", fib_st_matrix);
-    funcs.insert("test_singlethreaded_matrix_expo", fib_st_matrix_expo);
+    // funcs.insert("test_singlthreaded_normal", fib_st_normal);
+    // funcs.insert("test_singlethreaded_memo", fib_st_memo);
+    // funcs.insert("test_singlethreaded_linear", fib_st_linear);
+    // funcs.insert("test_singlethreaded_matrix", fib_st_matrix);
+    // funcs.insert("test_singlethreaded_matrix_expo", fib_st_matrix_expo);
     funcs.insert("test_gpu_normal", fib_normal_gpu_wrapper);
     funcs.insert("test_gpu_linear", fib_linear_gpu_wrapper);
     funcs.insert("test_gpu_matrix", fib_matrix_gpu_wrapper);
