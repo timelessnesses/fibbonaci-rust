@@ -12,7 +12,7 @@ int fib_st_normal_real(int n) {
 kernel void fib_st_normal(global ulong* results, ulong n) {
     int id = get_global_id(0);
     if (id < n) {
-        results[id] = fib_st_normal_real(n);
+        results[id] = fib_st_normal_real(id);
     }
 }
 
@@ -68,11 +68,15 @@ kernel void fib_st_matrix_expo(global ulong* results, ulong n) {
     int id = get_global_id(0);
 
     if (id < n) {
+        if (id == 0) {
+            results[id] = 0;
+            return;
+        }
+
         Matrix2x2 fib = {1, 0, 0, 1};
         Matrix2x2 step = {1, 1, 1, 0};
 
-        ulong m = id;
-        m -= 1;
+        ulong m = id - 1;
         while (m > 0) {
             if (m & 1) {
                 fib = matrix_mul(fib, step);

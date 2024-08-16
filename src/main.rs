@@ -5,11 +5,11 @@ use std::ops::Mul;
 use std::{collections::HashMap, io::Write};
 fn main() {
     let mut funcs: HashMap<&'static str, fn(u64) -> u64> = HashMap::new();
-    // funcs.insert("test_singlthreaded_normal", fib_st_normal);
-    // funcs.insert("test_singlethreaded_memo", fib_st_memo);
-    // funcs.insert("test_singlethreaded_linear", fib_st_linear);
-    // funcs.insert("test_singlethreaded_matrix", fib_st_matrix);
-    // funcs.insert("test_singlethreaded_matrix_expo", fib_st_matrix_expo);
+    funcs.insert("test_singlthreaded_normal", fib_st_normal);
+    funcs.insert("test_singlethreaded_memo", fib_st_memo);
+    funcs.insert("test_singlethreaded_linear", fib_st_linear);
+    funcs.insert("test_singlethreaded_matrix", fib_st_matrix);
+    funcs.insert("test_singlethreaded_matrix_expo", fib_st_matrix_expo);
     funcs.insert("test_gpu_normal", fib_normal_gpu_wrapper);
     funcs.insert("test_gpu_linear", fib_linear_gpu_wrapper);
     funcs.insert("test_gpu_matrix", fib_matrix_gpu_wrapper);
@@ -59,7 +59,7 @@ fn test<T>(call: &dyn Fn(u64) -> T, test_name: &str) -> u64 {
 }
 
 fn fib_normal_gpu_wrapper(i: u64) -> u64 {
-    let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(i as u32).build().expect("Failed to build proque");
+    let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(1).build().expect("Failed to build proque");
     let results = pro_que.create_buffer::<u64>().expect("Failed to build result buffer");
     let kernel = pro_que.kernel_builder("fib_st_normal").arg(&results).arg(i).build().expect("Failed to build kernel");
     unsafe { kernel.enq().expect("Failed to execute"); };
@@ -69,7 +69,7 @@ fn fib_normal_gpu_wrapper(i: u64) -> u64 {
 }
 
 fn fib_linear_gpu_wrapper(i: u64) -> u64 {
-    let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(i as u32).build().expect("Failed to build proque");
+    let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(1).build().expect("Failed to build proque");
     let results = pro_que.create_buffer::<u64>().expect("Failed to build result buffer");
     let kernel = pro_que.kernel_builder("fib_st_linear").arg(&results).arg(i).build().expect("Failed to build kernel");
     unsafe { kernel.enq().expect("Failed to execute"); };
@@ -79,7 +79,7 @@ fn fib_linear_gpu_wrapper(i: u64) -> u64 {
 }
 
 fn fib_matrix_gpu_wrapper(i: u64) -> u64 {
-    let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(i as u32).build().expect("Failed to build proque");
+    let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(1).build().expect("Failed to build proque");
     let results = pro_que.create_buffer::<u64>().expect("Failed to build result buffer");
     let kernel = pro_que.kernel_builder("fib_st_matrix").arg(&results).arg(i).build().expect("Failed to build kernel");
     unsafe { kernel.enq().expect("Failed to execute"); };
@@ -89,7 +89,7 @@ fn fib_matrix_gpu_wrapper(i: u64) -> u64 {
 }
 
 fn fib_matrix_expo_gpu_wrapper(i: u64) -> u64 {
-    let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(i as u32).build().expect("Failed to build proque");
+    let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(1).build().expect("Failed to build proque");
     let results = pro_que.create_buffer::<u64>().expect("Failed to build result buffer");
     let kernel = pro_que.kernel_builder("fib_st_matrix_expo").arg(&results).arg(i).build().expect("Failed to build kernel");
     unsafe { kernel.enq().expect("Failed to execute"); };
@@ -181,7 +181,7 @@ fn fib_st_matrix_expo(mut n: u64) -> u64 {
 }
 #[cfg(test)]
 mod tests {
-    use crate::{fib_st_linear, fib_st_matrix, fib_st_matrix_expo, fib_st_memo, fib_st_normal};
+    use crate::{fib_linear_gpu_wrapper, fib_matrix_expo_gpu_wrapper, fib_matrix_gpu_wrapper, fib_normal_gpu_wrapper, fib_st_linear, fib_st_matrix, fib_st_matrix_expo, fib_st_memo, fib_st_normal};
 
     const FIB: u64 = 40;
     const TARGET_VALUE: u64 = 102334155;
@@ -209,5 +209,25 @@ mod tests {
     #[test]
     fn test_matrix_expo() {
         assert_eq!(fib_st_matrix_expo(FIB), TARGET_VALUE)
+    }
+
+    #[test]
+    fn test_gpu_normal() {
+        assert_eq!(fib_normal_gpu_wrapper(FIB), TARGET_VALUE)
+    }
+
+    #[test]
+    fn test_gpu_linear() {
+        assert_eq!(fib_linear_gpu_wrapper(FIB), TARGET_VALUE)
+    }
+
+    #[test]
+    fn test_gpu_matrix() {
+        assert_eq!(fib_matrix_gpu_wrapper(FIB), TARGET_VALUE)
+    }
+
+    #[test]
+    fn test_gpu_matrix_expo() {
+        assert_eq!(fib_matrix_expo_gpu_wrapper(FIB), TARGET_VALUE)
     }
 }
