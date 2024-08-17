@@ -9,13 +9,15 @@ int fib_gpu_normal_real(int n) {
     return fib_gpu_normal_real(n - 1) + fib_gpu_normal_real(n - 2);
 }
 
+// crashes my gpu
 kernel void fib_gpu_normal(global ulong* results, ulong n) {
     int id = get_global_id(0);
     if (id < n) {
-        results[id] = fib_gpu_normal_real(id);
+        results[id] = fib_gpu_normal_real(n);
     }
 }
 
+// works!! hooray!!!
 kernel void fib_gpu_linear(global ulong* results, ulong n) {
     int id = get_global_id(0);
 
@@ -24,7 +26,7 @@ kernel void fib_gpu_linear(global ulong* results, ulong n) {
         ulong b = 1;
         ulong next;
 
-        ulong m = id;
+        ulong m = n;
         while (m > 0) {
             m -= 1;
             next = a + b;
@@ -48,6 +50,7 @@ Matrix2x2 matrix_mul(Matrix2x2 m1, Matrix2x2 m2) {
     return res;
 }
 
+// data buffer exceed length?
 kernel void fib_gpu_matrix(global ulong* results, ulong n) {
     int id = get_global_id(0);
 
@@ -55,7 +58,7 @@ kernel void fib_gpu_matrix(global ulong* results, ulong n) {
         Matrix2x2 gpuep = {0, 1, 1, 1};
         Matrix2x2 fib = {0, 1, 1, 1};
 
-        ulong m = id;
+        ulong m = n;
         while (m > 0) {
             m -= 1;
             fib = matrix_mul(fib, gpuep);
@@ -64,19 +67,23 @@ kernel void fib_gpu_matrix(global ulong* results, ulong n) {
     }
 }
 
+// returns fucking 0
 kernel void fib_gpu_matrix_expo(global ulong* results, ulong n) {
     int id = get_global_id(0);
 
     if (id < n) {
-        if (id == 0) {
+        if (n == 0) {
             results[id] = 0;
+            return;
+        } else if (n == 1) {
+            results[id] = 1;
             return;
         }
 
         Matrix2x2 fib = {1, 0, 0, 1};
         Matrix2x2 gpuep = {1, 1, 1, 0};
 
-        ulong m = id - 1;
+        ulong m = n - 1;
         while (m > 0) {
             if (m & 1) {
                 fib = matrix_mul(fib, gpuep);
