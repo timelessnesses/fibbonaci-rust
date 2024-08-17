@@ -53,25 +53,40 @@ fn run_tui(tests: HashMap<String, flume::Receiver<u64>>) -> Result<(), Box<dyn s
     stdout().execute(EnterAlternateScreen).unwrap();
 
     loop {
+        let mut all_done = true;
+
         for (name, r) in tests.iter() {
-            if let Ok(a) = r.try_recv() {
-                if a != 0 {
-                    progress.entry(name).and_modify(|i| i.0 = a).or_insert((a, false));
-                    continue;
-                }
-                progress.entry(name).and_modify(|i| i.1 = true);
+            match r.try_recv() {
+                Ok(a) => {
+                    if a != 0 {
+                        progress.insert(name, (a, false));
+                    } else {
+                        progress.insert(name, (0, true)); // mark as done
+                    }
+                },
+                Err(_) => {}
             }
+
             if r.is_disconnected() {
-                progress.entry(name).and_modify(|i| i.1 = true);
+                progress.insert(name, (0, true)); // mark as done
+            }
+
+            // Determine if all tests are done
+            if let Some((_, done)) = progress.get(name.as_str()) {
+                if !done {
+                    all_done = false;
+                }
             }
         }
 
-        if progress.iter().all(|(_, (_, s))| *s) && progress.len() != 0 {
+        if all_done {
             break;
         }
+
         terminal.draw(|f| {
             draw_ui(f, &progress);
         }).unwrap();
+
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
