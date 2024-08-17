@@ -1,101 +1,187 @@
 use ocl::ProQue;
-use rayon::iter::IntoParallelRefIterator;
-use rayon::iter::ParallelIterator;
+use ratatui::crossterm::terminal::disable_raw_mode;
+use ratatui::crossterm::terminal::enable_raw_mode;
+use ratatui::crossterm::terminal::EnterAlternateScreen;
+use ratatui::crossterm::ExecutableCommand;
+use ratatui::prelude::CrosstermBackend;
+use ratatui::Terminal;
+use std::io::stdout;
 use std::ops::Mul;
-use std::{collections::HashMap, io::Write};
+use std::sync::Arc;
+use std::collections::HashMap;
+use ratatui::Frame;
+use ratatui::prelude::*;
+use ratatui::widgets::Block;
+use ratatui::widgets::Borders;
+use ratatui::widgets::Paragraph;
+use flume::unbounded;
+
 fn main() {
-    let mut funcs: HashMap<&'static str, fn(u64) -> u64> = HashMap::new();
-    funcs.insert("test_singlthreaded_normal", fib_st_normal);
-    funcs.insert("test_singlethreaded_memo", fib_st_memo);
-    funcs.insert("test_singlethreaded_linear", fib_st_linear);
-    funcs.insert("test_singlethreaded_matrix", fib_st_matrix);
-    funcs.insert("test_singlethreaded_matrix_expo", fib_st_matrix_expo);
-    funcs.insert("test_gpu_normal", fib_normal_gpu_wrapper);
-    funcs.insert("test_gpu_linear", fib_linear_gpu_wrapper);
-    funcs.insert("test_gpu_matrix", fib_matrix_gpu_wrapper);
-    funcs.insert("test_gpu_matrix_expo", fib_matrix_expo_gpu_wrapper);
+    let funcs: HashMap<String, Arc<dyn Fn(u64) -> u64 + Send + Sync>> = {
+        let mut map = HashMap::new();
+        map.insert("test_singlethreaded_normal".to_string(), Arc::new(fib_st_normal) as Arc<dyn Fn(u64) -> u64 + Send + Sync>);
+        map.insert("test_singlethreaded_memo".to_string(), Arc::new(fib_st_memo) as Arc<dyn Fn(u64) -> u64 + Send + Sync>);
+        map.insert("test_singlethreaded_linear".to_string(), Arc::new(fib_st_linear) as Arc<dyn Fn(u64) -> u64 + Send + Sync>);
+        map.insert("test_singlethreaded_matrix".to_string(), Arc::new(fib_st_matrix) as Arc<dyn Fn(u64) -> u64 + Send + Sync>);
+        map.insert("test_singlethreaded_matrix_expo".to_string(), Arc::new(fib_st_matrix_expo) as Arc<dyn Fn(u64) -> u64 + Send + Sync>);
+        map.insert("test_gpu_normal".to_string(), Arc::new(fib_normal_gpu_wrapper()) as Arc<dyn Fn(u64) -> u64 + Send + Sync>);
+        map.insert("test_gpu_linear".to_string(), Arc::new(fib_linear_gpu_wrapper()) as Arc<dyn Fn(u64) -> u64 + Send + Sync>);
+        map.insert("test_gpu_matrix".to_string(), Arc::new(fib_matrix_gpu_wrapper()) as Arc<dyn Fn(u64) -> u64 + Send + Sync>);
+        map.insert("test_gpu_matrix_expo".to_string(), Arc::new(fib_matrix_expo_gpu_wrapper()) as Arc<dyn Fn(u64) -> u64 + Send + Sync>);
+        map
+    };
 
     rayon::ThreadPoolBuilder::new()
         .num_threads(funcs.len())
         .build_global()
         .expect("Failed to limit the thread counts");
 
-    let a = funcs
-        .par_iter()
-        .map(|(k, v)| (k.to_string(), test(v, k)))
-        .collect::<Vec<(String, u64)>>();
-
-    for x in a {
-        println!(
-            "Result for {} took number {} for fibbonaci operation to take more than a second",
-            x.0, x.1
-        )
+    let mut h = HashMap::new();
+    for (name, func) in funcs.iter() {
+        let (sender, receiver) = unbounded::<u64>();
+        test(func.clone(), sender);
+        h.insert(name.clone(), receiver);
     }
+    run_tui(h).unwrap();
 }
 
-#[must_use]
-fn test<T>(call: &dyn Fn(u64) -> T, test_name: &str) -> u64 {
-    let mut x = 1;
-    println!("\nTesting {}", test_name);
+fn run_tui(tests: HashMap<String, flume::Receiver<u64>>) -> Result<(), Box<dyn std::error::Error>> {
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    let mut progress: HashMap<&str, (u64, bool)> = HashMap::new();
+
+    enable_raw_mode().unwrap();
+    stdout().execute(EnterAlternateScreen).unwrap();
+
     loop {
-        let now = std::time::Instant::now();
-        call(x);
-        let ex_time = std::time::Instant::now();
-        let a = (ex_time - now).as_secs_f32();
-        if a > 1.0 {
+        for (name, r) in tests.iter() {
+            if let Ok(a) = r.try_recv() {
+                if a != 0 {
+                    progress.entry(name).and_modify(|i| i.0 = a).or_insert((a, false));
+                    continue;
+                }
+                progress.entry(name).and_modify(|i| i.1 = true);
+            }
+            if r.is_disconnected() {
+                progress.entry(name).and_modify(|i| i.1 = true);
+            }
+        }
+
+        if progress.iter().all(|(_, (_, s))| *s) && progress.len() != 0 {
             break;
         }
-        if (x % 100000) == 0 {
-            print!("\rX ({test_name}) is now: {x}                 ");
-            std::io::stdout().flush().expect("Failed to flush");
-        }
-        x += 1;
+        terminal.draw(|f| {
+            draw_ui(f, &progress);
+        }).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
-    println!(
-        "\n({test_name}) The number that took more than one second is: {}",
-        x
-    );
-    x
+
+    disable_raw_mode().unwrap();
+
+    Ok(())
 }
 
-fn fib_normal_gpu_wrapper(i: u64) -> u64 {
-    let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(1).build().expect("Failed to build proque");
-    let results = pro_que.create_buffer::<u64>().expect("Failed to build result buffer");
-    let kernel = pro_que.kernel_builder("fib_st_normal").arg(&results).arg(i).build().expect("Failed to build kernel");
-    unsafe { kernel.enq().expect("Failed to execute"); };
-    let mut b = vec![0u64;1];
-    results.read(&mut b).enq().expect("Failed to read");
-    b[0]
+fn draw_ui(frame: &mut Frame, progress: &HashMap<&str, (u64, bool)>) {
+    match progress.len() {
+        0 => {
+            let paragraph = Paragraph::new("Initializing").block(Block::default().title("Initializing tests..."));
+            frame.render_widget(paragraph, Layout::default().constraints(vec![Constraint::Percentage(100)]).split(frame.area())[0])
+        },
+        _ => {
+            let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![Constraint::Percentage(100 / progress.len() as u16); progress.len()])
+        .split(frame.area());
+
+            for (i, (test_name, &prog)) in progress.iter().enumerate() {
+                let text = format!("Status: {} ({})", prog.0, {
+                    if prog.1 {
+                        "Done"
+                    }
+                    else {
+                        "Running"
+                    }
+                });
+
+                let paragraph = Paragraph::new(text)
+                    .block(Block::default().borders(Borders::ALL).title(test_name.to_string()));
+
+                frame.render_widget(paragraph, chunks[i]);
+            }
+        }
+    }
 }
 
-fn fib_linear_gpu_wrapper(i: u64) -> u64 {
-    let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(1).build().expect("Failed to build proque");
-    let results = pro_que.create_buffer::<u64>().expect("Failed to build result buffer");
-    let kernel = pro_que.kernel_builder("fib_st_linear").arg(&results).arg(i).build().expect("Failed to build kernel");
-    unsafe { kernel.enq().expect("Failed to execute"); };
-    let mut b = vec![0u64;1];
-    results.read(&mut b).enq().expect("Failed to read");
-    b[0]
+fn test(
+    call: Arc<dyn Fn(u64) -> u64 + Send + Sync>,
+    tx: flume::Sender<u64>,
+) {
+    rayon::spawn(move || {
+        let mut x = 1;
+        loop {
+            let now = std::time::Instant::now();
+            call(x);
+            let ex_time = std::time::Instant::now();
+            let duration = (ex_time - now).as_secs_f32();
+            if duration > 1.0 {
+                break;
+            }
+            tx.send(x).expect("Failed to send data");
+            x += 1;
+        }
+        tx.send(0).expect("Failed to send final progress"); // mark as done
+    });
 }
 
-fn fib_matrix_gpu_wrapper(i: u64) -> u64 {
+fn fib_normal_gpu_wrapper() -> impl Fn(u64) -> u64 + 'static {
     let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(1).build().expect("Failed to build proque");
     let results = pro_que.create_buffer::<u64>().expect("Failed to build result buffer");
-    let kernel = pro_que.kernel_builder("fib_st_matrix").arg(&results).arg(i).build().expect("Failed to build kernel");
-    unsafe { kernel.enq().expect("Failed to execute"); };
-    let mut b = vec![0u64;1];
-    results.read(&mut b).enq().expect("Failed to read");
-    b[0]
+    let a = move |i: u64| {
+        let kernel = pro_que.kernel_builder("fib_gpu_normal").arg(&results).arg(i).build().expect("Failed to build kernel");
+        unsafe { kernel.enq().expect("Failed to execute"); };
+        let mut b = vec![0u64;1];
+        results.read(&mut b).enq().expect("Failed to read");
+        b[0]
+    };
+    a
 }
 
-fn fib_matrix_expo_gpu_wrapper(i: u64) -> u64 {
+fn fib_linear_gpu_wrapper() -> impl Fn(u64) -> u64 + 'static {
     let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(1).build().expect("Failed to build proque");
     let results = pro_que.create_buffer::<u64>().expect("Failed to build result buffer");
-    let kernel = pro_que.kernel_builder("fib_st_matrix_expo").arg(&results).arg(i).build().expect("Failed to build kernel");
-    unsafe { kernel.enq().expect("Failed to execute"); };
-    let mut b = vec![0u64;1];
-    results.read(&mut b).enq().expect("Failed to read");
-    b[0]
+    let a = move |i: u64| {
+        let kernel = pro_que.kernel_builder("fib_gpu_linear").arg(&results).arg(i).build().expect("Failed to build kernel");
+        unsafe { kernel.enq().expect("Failed to execute"); };
+        let mut b = vec![0u64;1];
+        results.read(&mut b).enq().expect("Failed to read");
+        b[0]
+    };
+    a
+}
+
+fn fib_matrix_gpu_wrapper() -> impl Fn(u64) -> u64 + 'static {
+    let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(1).build().expect("Failed to build proque");
+    let results = pro_que.create_buffer::<u64>().expect("Failed to build result buffer");
+    let a = move |i: u64| {
+        let kernel = pro_que.kernel_builder("fib_gpu_matrix").arg(&results).arg(i).build().expect("Failed to build kernel");
+        unsafe { kernel.enq().expect("Failed to execute"); };
+        let mut b = vec![0u64;1];
+        results.read(&mut b).enq().expect("Failed to read");
+        b[0]
+    };
+    a
+}
+
+fn fib_matrix_expo_gpu_wrapper() -> impl Fn(u64) -> u64 + 'static {
+    let pro_que = ProQue::builder().src(include_str!("../opencl/fibs.cl")).dims(1).build().expect("Failed to build proque");
+    let results = pro_que.create_buffer::<u64>().expect("Failed to build result buffer");
+    let a = move |i: u64| {
+        let kernel = pro_que.kernel_builder("fib_gpu_matrix_expo").arg(&results).arg(i).build().expect("Failed to build kernel");
+        unsafe { kernel.enq().expect("Failed to execute"); };
+        let mut b = vec![0u64;1];
+        results.read(&mut b).enq().expect("Failed to read");
+        b[0]
+    };
+    a
 }
 
 fn fib_st_normal(n: u64) -> u64 {
@@ -139,7 +225,7 @@ fn fib_st_linear(mut n: u64) -> u64 {
 #[derive(Clone, Copy)]
 struct Matrix2x2(u64, u64, u64, u64);
 
-impl Mul for Matrix2x2 { // mulassign bad
+impl Mul for Matrix2x2 {
     type Output = Matrix2x2;
     fn mul(self, rhs: Self) -> Self::Output {
         let a = self.0 * rhs.0 + self.1 * rhs.2;
@@ -179,6 +265,7 @@ fn fib_st_matrix_expo(mut n: u64) -> u64 {
     }
     fib.0
 }
+
 #[cfg(test)]
 mod tests {
     use crate::{fib_linear_gpu_wrapper, fib_matrix_expo_gpu_wrapper, fib_matrix_gpu_wrapper, fib_normal_gpu_wrapper, fib_st_linear, fib_st_matrix, fib_st_matrix_expo, fib_st_memo, fib_st_normal};
@@ -213,21 +300,21 @@ mod tests {
 
     #[test]
     fn test_gpu_normal() {
-        assert_eq!(fib_normal_gpu_wrapper(FIB), TARGET_VALUE)
+        assert_eq!(fib_normal_gpu_wrapper()(FIB), TARGET_VALUE)
     }
 
     #[test]
     fn test_gpu_linear() {
-        assert_eq!(fib_linear_gpu_wrapper(FIB), TARGET_VALUE)
+        assert_eq!(fib_linear_gpu_wrapper()(FIB), TARGET_VALUE)
     }
 
     #[test]
     fn test_gpu_matrix() {
-        assert_eq!(fib_matrix_gpu_wrapper(FIB), TARGET_VALUE)
+        assert_eq!(fib_matrix_gpu_wrapper()(FIB), TARGET_VALUE)
     }
 
     #[test]
     fn test_gpu_matrix_expo() {
-        assert_eq!(fib_matrix_expo_gpu_wrapper(FIB), TARGET_VALUE)
+        assert_eq!(fib_matrix_expo_gpu_wrapper()(FIB), TARGET_VALUE)
     }
 }

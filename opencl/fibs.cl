@@ -2,21 +2,21 @@
   * No memoization sadly
  */
 
-int fib_st_normal_real(int n) {
+int fib_gpu_normal_real(int n) {
     if (n == 0 || n == 1) {
         return n;
     }
-    return fib_st_normal_real(n - 1) + fib_st_normal_real(n - 2);
+    return fib_gpu_normal_real(n - 1) + fib_gpu_normal_real(n - 2);
 }
 
-kernel void fib_st_normal(global ulong* results, ulong n) {
+kernel void fib_gpu_normal(global ulong* results, ulong n) {
     int id = get_global_id(0);
     if (id < n) {
-        results[id] = fib_st_normal_real(id);
+        results[id] = fib_gpu_normal_real(id);
     }
 }
 
-kernel void fib_st_linear(global ulong* results, ulong n) {
+kernel void fib_gpu_linear(global ulong* results, ulong n) {
     int id = get_global_id(0);
 
     if (id < n) {
@@ -48,23 +48,23 @@ Matrix2x2 matrix_mul(Matrix2x2 m1, Matrix2x2 m2) {
     return res;
 }
 
-kernel void fib_st_matrix(global ulong* results, ulong n) {
+kernel void fib_gpu_matrix(global ulong* results, ulong n) {
     int id = get_global_id(0);
 
     if (id < n) {
-        Matrix2x2 step = {0, 1, 1, 1};
+        Matrix2x2 gpuep = {0, 1, 1, 1};
         Matrix2x2 fib = {0, 1, 1, 1};
 
         ulong m = id;
         while (m > 0) {
             m -= 1;
-            fib = matrix_mul(fib, step);
+            fib = matrix_mul(fib, gpuep);
         }
         results[id] = fib.a;
     }
 }
 
-kernel void fib_st_matrix_expo(global ulong* results, ulong n) {
+kernel void fib_gpu_matrix_expo(global ulong* results, ulong n) {
     int id = get_global_id(0);
 
     if (id < n) {
@@ -74,14 +74,14 @@ kernel void fib_st_matrix_expo(global ulong* results, ulong n) {
         }
 
         Matrix2x2 fib = {1, 0, 0, 1};
-        Matrix2x2 step = {1, 1, 1, 0};
+        Matrix2x2 gpuep = {1, 1, 1, 0};
 
         ulong m = id - 1;
         while (m > 0) {
             if (m & 1) {
-                fib = matrix_mul(fib, step);
+                fib = matrix_mul(fib, gpuep);
             }
-            step = matrix_mul(step, step);
+            gpuep = matrix_mul(gpuep, gpuep);
             m >>= 1;
         }
         results[id] = fib.a;

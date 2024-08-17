@@ -5,6 +5,11 @@ edition = "2021"
 
 [dependencies]
 dashmap = { version = "6.0.1", features = ["inline", "rayon"] }
+flume = "0.11.0"
 lazy_static = "1.5.0"
 ocl = "0.19.7"
+ratatui = "0.28.0"
 rayon = "1.10.0"
+
+[profile.release]
+debug = true
