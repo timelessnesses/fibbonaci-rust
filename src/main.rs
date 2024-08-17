@@ -87,7 +87,9 @@ fn main() {
     run_tui(h).unwrap();
 }
 
-fn run_tui(tests: HashMap<String, flume::Receiver<(u64, f64)>>) -> Result<(), Box<dyn std::error::Error>> {
+fn run_tui(
+    tests: HashMap<String, flume::Receiver<(u64, f64)>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let progress: DashMap<&str, (u64, bool, f64)> = DashMap::new();
 
@@ -117,7 +119,7 @@ fn run_tui(tests: HashMap<String, flume::Receiver<(u64, f64)>>) -> Result<(), Bo
             }
         });
 
-        if progress.par_iter().all(|i| i.value().1) && progress.len() != 0 {
+        if progress.par_iter().all(|i| i.value().1) && !progress.is_empty() {
             break;
         }
         terminal
@@ -157,13 +159,18 @@ fn draw_ui(frame: &mut Frame, progress: &DashMap<&str, (u64, bool, f64)>) {
             for (i, n) in progress.iter().enumerate() {
                 let test_name = n.key();
                 let prog = n.value();
-                let text = format!("Status: Solving Fibonnaci {} ({})\nSpeed: {} Fibbonaci number/second", prog.0, {
-                    if prog.1 {
-                        "Done"
-                    } else {
-                        "Running"
-                    }
-                }, prog.2);
+                let text = format!(
+                    "Status: Solving Fibonnaci {} ({})\nSpeed: {} Fibbonaci number/second",
+                    prog.0,
+                    {
+                        if prog.1 {
+                            "Done"
+                        } else {
+                            "Running"
+                        }
+                    },
+                    prog.2
+                );
 
                 let paragraph = Paragraph::new(text).block(
                     Block::default()
@@ -179,7 +186,7 @@ fn draw_ui(frame: &mut Frame, progress: &DashMap<&str, (u64, bool, f64)>) {
             }
             let cache_stat = Paragraph::new(format!(
                 "CACHE Size is currently: {} megabytes",
-                CACHE.deep_size_of() as f32 / 1_048_576 as f32
+                CACHE.deep_size_of() as f32 / 1_048_576_f32
             ))
             .block(
                 Block::default()
@@ -207,7 +214,8 @@ fn test(call: Arc<dyn Fn(u64) -> u64 + Send + Sync>, tx: flume::Sender<(u64, f64
             tx.send((x, previous_fns)).expect("Failed to send data");
             x += 1;
         }
-        tx.send((0,previous_fns)).expect("Failed to send final progress"); // mark as done
+        tx.send((0, previous_fns))
+            .expect("Failed to send final progress"); // mark as done
     });
 }
 
@@ -259,7 +267,11 @@ fn fib_matrix_gpu_wrapper() -> impl Fn(u64) -> u64 + 'static {
     let pro_que = PRO_QUE.clone();
     move |i: u64| {
         let pro_que = pro_que.lock().unwrap();
-        let mut results = ocl::Buffer::builder().len(1).queue(pro_que.queue().clone()).build().unwrap();
+        let mut results = ocl::Buffer::builder()
+            .len(1)
+            .queue(pro_que.queue().clone())
+            .build()
+            .unwrap();
         let kernel = pro_que
             .kernel_builder("fib_gpu_matrix")
             .arg(&mut results)
@@ -270,7 +282,7 @@ fn fib_matrix_gpu_wrapper() -> impl Fn(u64) -> u64 + 'static {
         unsafe {
             kernel.enq().expect("Failed to execute");
         };
-        let mut b = vec![0u64;1];
+        let mut b = vec![0u64; 1];
         results.read(&mut b).enq().expect("Failed to read");
         b[0]
     }
@@ -280,7 +292,11 @@ fn fib_matrix_expo_gpu_wrapper() -> impl Fn(u64) -> u64 + 'static {
     let pro_que = PRO_QUE.clone();
     move |i: u64| {
         let pro_que = pro_que.lock().unwrap();
-        let mut results = ocl::Buffer::builder().len(1).queue(pro_que.queue().clone()).build().unwrap();
+        let mut results = ocl::Buffer::builder()
+            .len(1)
+            .queue(pro_que.queue().clone())
+            .build()
+            .unwrap();
         let kernel = pro_que
             .kernel_builder("fib_gpu_matrix_expo")
             .arg(&mut results)
@@ -383,9 +399,8 @@ fn fib_st_matrix_expo(mut n: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::{
-        fib_linear_gpu_wrapper, fib_matrix_expo_gpu_wrapper, fib_matrix_gpu_wrapper,
-        fib_st_linear, fib_st_matrix, fib_st_matrix_expo, fib_st_memo,
-        fib_st_normal,
+        fib_linear_gpu_wrapper, fib_matrix_expo_gpu_wrapper, fib_matrix_gpu_wrapper, fib_st_linear,
+        fib_st_matrix, fib_st_matrix_expo, fib_st_memo, fib_st_normal,
     };
 
     const FIB: u64 = 40;
