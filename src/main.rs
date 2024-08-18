@@ -6,6 +6,7 @@ use ocl::ProQue;
 use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::crossterm::terminal::EnterAlternateScreen;
+use ratatui::crossterm::terminal::LeaveAlternateScreen;
 use ratatui::crossterm::ExecutableCommand;
 use ratatui::prelude::CrosstermBackend;
 use ratatui::prelude::*;
@@ -16,9 +17,12 @@ use ratatui::Frame;
 use ratatui::Terminal;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
+use signal_hook::consts::TERM_SIGNALS;
 use std::collections::HashMap;
 use std::io::stdout;
 use std::ops::Mul;
+use std::sync::atomic::AtomicBool;
+use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
 
 lazy_static! {
@@ -33,7 +37,13 @@ lazy_static! {
         std::sync::RwLock::new(std::collections::HashMap::new());
 }
 
+const TIMEOUT: f32 = 1.0;
+
 fn main() {
+    let dies = Arc::new(AtomicBool::new(false));
+    for sig in TERM_SIGNALS {
+        signal_hook::flag::register(*sig, Arc::clone(&dies)).expect("Failed to register exit code");
+    }
     let funcs: HashMap<String, Arc<dyn Fn(u64) -> u64 + Send + Sync>> = {
         let mut map = HashMap::new();
         map.insert(
@@ -78,48 +88,57 @@ fn main() {
     //     .build_global()
     //     .expect("Failed to limit the thread counts");
 
-    let mut h = HashMap::new();
+    let h = DashMap::new();
     for (name, func) in funcs.iter() {
         let (sender, receiver) = bounded::<(u64, f64)>(1);
         test(func.clone(), sender);
         h.insert(name.clone(), receiver);
     }
-    run_tui(h).unwrap();
+    run_tui(h, dies).unwrap();
 }
 
 fn run_tui(
-    tests: HashMap<String, flume::Receiver<(u64, f64)>>,
+    tests: DashMap<String, flume::Receiver<(u64, f64)>>,
+    dies: Arc<AtomicBool>
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
-    let progress: DashMap<&str, (u64, bool, f64)> = DashMap::new();
+    let progress: Arc<RwLock<DashMap<String, (u64, bool, f64)>>> = Arc::new(RwLock::new(DashMap::new()));
+
+    let cloned = Arc::clone(&progress);
+    std::thread::spawn(move || {
+        loop {
+        let progress = cloned.write().unwrap();
+            tests.par_iter().for_each(|i| {
+                let name = i.key();
+                let r = i.value();
+                if let Ok(a) = r.try_recv() {
+                    if a.0 != 0 {
+                        progress
+                            .entry(name.to_string())
+                            .and_modify(|i| {
+                                i.0 = a.0;
+                                i.2 = a.1;
+                            })
+                            .or_insert((a.0, false, a.1));
+                        return;
+                    }
+                    progress.entry(name.to_string()).and_modify(|i| {
+                        i.1 = true;
+                        i.2 = a.1;
+                    });
+                }
+                if r.is_disconnected() {
+                    progress.entry(name.to_string()).and_modify(|i| i.1 = true);
+                }
+            });
+        }
+    });
 
     enable_raw_mode().unwrap();
     stdout().execute(EnterAlternateScreen).unwrap();
 
-    loop {
-        tests.par_iter().for_each(|(name, r)| {
-            if let Ok(a) = r.try_recv() {
-                if a.0 != 0 {
-                    progress
-                        .entry(name)
-                        .and_modify(|i| {
-                            i.0 = a.0;
-                            i.2 = a.1;
-                        })
-                        .or_insert((a.0, false, a.1));
-                    return;
-                }
-                progress.entry(name).and_modify(|i| {
-                    i.1 = true;
-                    i.2 = a.1;
-                });
-            }
-            if r.is_disconnected() {
-                progress.entry(name).and_modify(|i| i.1 = true);
-            }
-        });
-
-        if progress.par_iter().all(|i| i.value().1) && !progress.is_empty() {
+    while !dies.load(std::sync::atomic::Ordering::Relaxed) {
+        if progress.read().unwrap().iter().all(|i| i.value().1) && !progress.read().unwrap().is_empty() {
             break;
         }
         terminal
@@ -127,15 +146,17 @@ fn run_tui(
                 draw_ui(f, &progress);
             })
             .unwrap();
-        // std::thread::sleep(std::time::Duration::from_millis(50));
+        std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
     disable_raw_mode().unwrap();
+    stdout().execute(LeaveAlternateScreen).unwrap();
 
     Ok(())
 }
 
-fn draw_ui(frame: &mut Frame, progress: &DashMap<&str, (u64, bool, f64)>) {
+fn draw_ui(frame: &mut Frame, progress: &Arc<RwLock<DashMap<String, (u64, bool, f64)>>>) {
+    let progress = progress.read().unwrap();
     match progress.len() {
         0 => {
             let paragraph = Paragraph::new("Initializing")
@@ -148,6 +169,9 @@ fn draw_ui(frame: &mut Frame, progress: &DashMap<&str, (u64, bool, f64)>) {
             )
         }
         _ => {
+            let mut sorted_progress: Vec<_> = progress.iter().collect();
+            sorted_progress.sort_by(|a, b| b.value().2.partial_cmp(&a.value().2).unwrap());
+
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints(vec![
@@ -156,11 +180,11 @@ fn draw_ui(frame: &mut Frame, progress: &DashMap<&str, (u64, bool, f64)>) {
                 ])
                 .split(frame.area());
 
-            for (i, n) in progress.iter().enumerate() {
-                let test_name = n.key();
-                let prog = n.value();
+            for (i, entry) in sorted_progress.iter().enumerate() {
+                let test_name = entry.key();
+                let prog = entry.value();
                 let text = format!(
-                    "Status: Solving Fibonnaci {} ({})\nSpeed: {} Fibbonaci number/second",
+                    "Status: Solving Fibonacci {} ({})\nSpeed: {} Fibonacci numbers/second",
                     prog.0,
                     {
                         if prog.1 {
@@ -175,7 +199,7 @@ fn draw_ui(frame: &mut Frame, progress: &DashMap<&str, (u64, bool, f64)>) {
                 let paragraph = Paragraph::new(text).block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .title(test_name.to_string())
+                        .title(format!("#{} ", i + 1) + test_name)
                         .border_style(match prog.1 {
                             true => Color::Green,
                             false => Color::Cyan,
@@ -184,9 +208,11 @@ fn draw_ui(frame: &mut Frame, progress: &DashMap<&str, (u64, bool, f64)>) {
 
                 frame.render_widget(paragraph, chunks[i]);
             }
+
             let cache_stat = Paragraph::new(format!(
-                "CACHE Size is currently: {} megabytes",
-                CACHE.deep_size_of() as f32 / 1_048_576_f32
+                "CACHE Size is currently: {} megabytes\nTimeout is: {} seconds",
+                CACHE.deep_size_of() as f32 / 1_048_576_f32,
+                TIMEOUT
             ))
             .block(
                 Block::default()
@@ -207,7 +233,7 @@ fn test(call: Arc<dyn Fn(u64) -> u64 + Send + Sync>, tx: flume::Sender<(u64, f64
             call(x);
             let ex_time = std::time::Instant::now();
             let duration = (ex_time - now).as_secs_f32();
-            if duration > 1.0 {
+            if duration > TIMEOUT {
                 break;
             }
             previous_fns = 1.0 / duration as f64;
