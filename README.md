@@ -5,14 +5,15 @@ just very fast fibbonaci functions (TC: Time Complexity, SC: Space Complexity)
 ## order
 
 1. `fib_st_matrix_expo` (TC: O(log(n)), SC: O(1)) [https://www.youtube.com/watch?v=KzT9I1d-LlQ](https://www.youtube.com/watch?v=KzT9I1d-LlQ)
-2. `fib_st_matrix` (TC: O(n), SC: O(1)) [https://www.youtube.com/watch?v=KzT9I1d-LlQ](https://www.youtube.com/watch?v=KzT9I1d-LlQ)
-3. `fib_st_linear` (TC: O(n), SC: O(1))
-4. `fib_st_memo` (TC: O(n), SC: O(n))
-5. `fib_gpu_matrix` (TC: O(n), SC: O(1))
-6. `fib_gpu_matrix_expo` (TC: O(log(n)), SC: O(1))
-7. `fib_gpu_linear` (TC: O(n), SC: O(1))
-8. `fib_st_normal` (TC: O(2^n), SC: O(n))
-9. `fib_gpu_normal` (TC: O(2^n), SC: O(n)) (crashing my gpu)
+2. `fib_st_memo_vec` (TC: O(n), SC: O(n))
+3. `fib_st_memo_hashmap` (TC: O(n), SC: O(n))
+4. `fib_st_matrix` (TC: O(n), SC: O(1)) [https://www.youtube.com/watch?v=KzT9I1d-LlQ](https://www.youtube.com/watch?v=KzT9I1d-LlQ)
+5. `fib_st_linear` (TC: O(n), SC: O(1))
+6. `fib_gpu_matrix` (TC: O(n), SC: O(1))
+7. `fib_gpu_matrix_expo` (TC: O(log(n)), SC: O(1))
+8. `fib_gpu_linear` (TC: O(n), SC: O(1))
+9. `fib_st_normal` (TC: O(2^n), SC: O(n))
+10. `fib_gpu_normal` (TC: O(2^n), SC: O(n)) (crashing my gpu)
 
 ## note
 

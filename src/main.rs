@@ -33,8 +33,9 @@ lazy_static! {
             .build()
             .expect("Failed to build proque")
     ));
-    static ref CACHE: std::sync::RwLock<std::collections::HashMap<u64, u64>> =
+    static ref CACHE_H: std::sync::RwLock<std::collections::HashMap<u64, u64>> =
         std::sync::RwLock::new(std::collections::HashMap::new());
+    static ref CACHE_V: std::sync::RwLock<Vec<u64>> = std::sync::RwLock::new(Vec::new());
 }
 
 const TIMEOUT: f32 = 1.0;
@@ -51,8 +52,12 @@ fn main() {
             Arc::new(fib_st_normal) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
         );
         map.insert(
-            "test_singlethreaded_memo".to_string(),
-            Arc::new(fib_st_memo) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
+            "test_singlethreaded_memo_hashmap".to_string(),
+            Arc::new(fib_st_memo_hashmap) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
+        );
+        map.insert(
+            "test_singlethreaded_memo_vec".to_string(),
+            Arc::new(fib_st_memo_vec) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
         );
         map.insert(
             "test_singlethreaded_linear".to_string(),
@@ -210,8 +215,9 @@ fn draw_ui(frame: &mut Frame, progress: &Arc<RwLock<DashMap<String, (u64, bool, 
             }
 
             let cache_stat = Paragraph::new(format!(
-                "CACHE Size is currently: {} megabytes\nTimeout is: {} seconds",
-                CACHE.deep_size_of() as f32 / 1_048_576_f32,
+                "CACHE Hashmap Size is currently: {} megabytes\nCACHE Vec Size is currently: {} megabytes\n\nTimeout is: {} seconds",
+                CACHE_H.deep_size_of() as f32 / 1_048_576_f32,
+                CACHE_V.deep_size_of() as f32 / 1_048_576_f32,
                 TIMEOUT
             ))
             .block(
@@ -346,20 +352,41 @@ fn fib_st_normal(n: u64) -> u64 {
     }
 }
 
-fn fib_st_memo(n: u64) -> u64 {
+fn fib_st_memo_hashmap(n: u64) -> u64 {
     if n <= 1 {
         return n;
     }
     {
-        let cache = CACHE.read().unwrap();
+        let cache = CACHE_H.read().unwrap();
         if let Some(&result) = cache.get(&n) {
             return result;
         }
     }
-    let result = fib_st_memo(n - 1) + fib_st_memo(n - 2);
+    let result = fib_st_memo_hashmap(n - 1) + fib_st_memo_hashmap(n - 2);
     {
-        let mut cache = CACHE.write().unwrap();
+        let mut cache = CACHE_H.write().unwrap();
         cache.insert(n, result);
+    }
+    result
+}
+
+fn fib_st_memo_vec(n: u64) -> u64 {
+    if n <= 1 {
+        return n;
+    }
+    {
+        let cache = CACHE_V.read().unwrap();
+        if (n as usize) < cache.len() {
+            return cache[n as usize - 1];
+        }
+    }
+    let result = fib_st_memo_vec(n - 1) + fib_st_memo_vec(n - 2);
+    {
+        let mut cache = CACHE_V.write().unwrap();
+        if n as usize >= cache.len() {
+            cache.resize(n as usize, 0);
+        }
+        cache[n as usize - 1] = result;
     }
     result
 }
@@ -425,8 +452,7 @@ fn fib_st_matrix_expo(mut n: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use crate::{
-        fib_linear_gpu_wrapper, fib_matrix_expo_gpu_wrapper, fib_matrix_gpu_wrapper, fib_st_linear,
-        fib_st_matrix, fib_st_matrix_expo, fib_st_memo, fib_st_normal,
+        fib_linear_gpu_wrapper, fib_matrix_expo_gpu_wrapper, fib_matrix_gpu_wrapper, fib_st_linear, fib_st_matrix, fib_st_matrix_expo, fib_st_memo_hashmap, fib_st_memo_vec, fib_st_normal
     };
 
     const FIB: u64 = 40;
@@ -439,7 +465,8 @@ mod tests {
 
     #[test]
     fn test_memo() {
-        assert_eq!(fib_st_memo(FIB), TARGET_VALUE)
+        assert_eq!(fib_st_memo_hashmap(FIB), TARGET_VALUE);
+        assert_eq!(fib_st_memo_vec(FIB), TARGET_VALUE);
     }
 
     #[test]
