@@ -17,12 +17,10 @@ use ratatui::Frame;
 use ratatui::Terminal;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
-use signal_hook::consts::TERM_SIGNALS;
 use std::collections::HashMap;
 use std::io::stdout;
 use std::ops::Mul;
 use std::sync::atomic::AtomicBool;
-use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
 
 lazy_static! {
@@ -39,63 +37,66 @@ lazy_static! {
 }
 
 const TIMEOUT: f32 = 1.0;
+const HARD_LIMIT: usize = 1_000_000;
 
 fn main() {
     let dies = Arc::new(AtomicBool::new(false));
-    for sig in TERM_SIGNALS {
-        signal_hook::flag::register(*sig, Arc::clone(&dies)).expect("Failed to register exit code");
-    }
-    let funcs: HashMap<String, Arc<dyn Fn(u64) -> u64 + Send + Sync>> = {
-        let mut map = HashMap::new();
-        map.insert(
-            "test_singlethreaded_normal".to_string(),
-            Arc::new(fib_st_normal) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
-        );
-        map.insert(
-            "test_singlethreaded_memo_hashmap".to_string(),
-            Arc::new(fib_st_memo_hashmap) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
-        );
-        map.insert(
-            "test_singlethreaded_memo_vec".to_string(),
-            Arc::new(fib_st_memo_vec) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
-        );
-        map.insert(
-            "test_singlethreaded_linear".to_string(),
-            Arc::new(fib_st_linear) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
-        );
-        map.insert(
-            "test_singlethreaded_matrix".to_string(),
-            Arc::new(fib_st_matrix) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
-        );
-        map.insert(
-            "test_singlethreaded_matrix_expo".to_string(),
-            Arc::new(fib_st_matrix_expo) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
-        );
-        // please don't uncomment gpu_normal
-        // map.insert("test_gpu_normal".to_string(), Arc::new(fib_normal_gpu_wrapper()) as Arc<dyn Fn(u64) -> u64 + Send + Sync>);
-        map.insert(
-            "test_gpu_linear".to_string(),
-            Arc::new(fib_linear_gpu_wrapper()) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
-        );
-        map.insert(
-            "test_gpu_matrix".to_string(),
-            Arc::new(fib_matrix_gpu_wrapper()) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
-        );
-        map.insert(
-            "test_gpu_matrix_expo".to_string(),
-            Arc::new(fib_matrix_expo_gpu_wrapper()) as Arc<dyn Fn(u64) -> u64 + Send + Sync>,
-        );
-        map
-    };
-
+    let cloned_death = Arc::clone(&dies);
+    ctrlc::set_handler(move || {
+        cloned_death.store(true, std::sync::atomic::Ordering::Relaxed);
+    })
+    .expect("Failed to set CTRL C handler");
+    let mut funcs: HashMap<String, Arc<dyn Fn(u64) -> u64 + Send + Sync>> = HashMap::new();
+    funcs.insert(
+        "test_singlethreaded_normal".to_string(),
+        Arc::new(fib_st_normal),
+    );
+    funcs.insert(
+        "test_singlethreaded_memo_hashmap".to_string(),
+        Arc::new(fib_st_memo_hashmap),
+    );
+    funcs.insert(
+        "test_singlethreaded_memo_vec".to_string(),
+        Arc::new(fib_st_memo_vec),
+    );
+    funcs.insert(
+        "test_singlethreaded_linear".to_string(),
+        Arc::new(fib_st_linear),
+    );
+    funcs.insert(
+        "test_singlethreaded_matrix".to_string(),
+        Arc::new(fib_st_matrix),
+    );
+    funcs.insert(
+        "test_singlethreaded_matrix_expo".to_string(),
+        Arc::new(fib_st_matrix_expo),
+    );
+    funcs.insert(
+        "test_singlethreaded_successor".to_string(),
+        Arc::new(fib_st_successor),
+    );
+    // please don't uncomment gpu_normal
+    // funcs.insert("test_gpu_normal".to_string(), Arc::new(fib_normal_gpu_wrapper()));
+    funcs.insert(
+        "test_gpu_linear".to_string(),
+        Arc::new(fib_linear_gpu_wrapper()),
+    );
+    funcs.insert(
+        "test_gpu_matrix".to_string(),
+        Arc::new(fib_matrix_gpu_wrapper()),
+    );
+    funcs.insert(
+        "test_gpu_matrix_expo".to_string(),
+        Arc::new(fib_matrix_expo_gpu_wrapper()),
+    );
     // rayon::ThreadPoolBuilder::new()
     //     .num_threads(funcs.len())
     //     .build_global()
     //     .expect("Failed to limit the thread counts");
 
-    let h = DashMap::new();
+    let mut h = HashMap::new();
     for (name, func) in funcs.iter() {
-        let (sender, receiver) = bounded::<(u64, f64)>(1);
+        let (sender, receiver) = bounded::<(u64, f32)>(1);
         test(func.clone(), sender);
         h.insert(name.clone(), receiver);
     }
@@ -103,39 +104,38 @@ fn main() {
 }
 
 fn run_tui(
-    tests: DashMap<String, flume::Receiver<(u64, f64)>>,
-    dies: Arc<AtomicBool>
+    tests: HashMap<String, flume::Receiver<(u64, f32)>>,
+    dies: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
-    let progress: Arc<RwLock<DashMap<String, (u64, bool, f64)>>> = Arc::new(RwLock::new(DashMap::new()));
+    let progress = Arc::new(DashMap::new());
 
     let cloned = Arc::clone(&progress);
-    std::thread::spawn(move || {
-        loop {
-        let progress = cloned.write().unwrap();
-            tests.par_iter().for_each(|i| {
-                let name = i.key();
-                let r = i.value();
-                if let Ok(a) = r.try_recv() {
-                    if a.0 != 0 {
-                        progress
-                            .entry(name.to_string())
-                            .and_modify(|i| {
-                                i.0 = a.0;
-                                i.2 = a.1;
-                            })
-                            .or_insert((a.0, false, a.1));
-                        return;
-                    }
-                    progress.entry(name.to_string()).and_modify(|i| {
-                        i.1 = true;
-                        i.2 = a.1;
-                    });
+    let demise = dies.clone();
+    std::thread::spawn(move || loop {
+        tests.par_iter().for_each(|(name, r)| {
+            if let Ok(a) = r.try_recv() {
+                if a.0 != 0 {
+                    cloned
+                        .entry(name.to_string())
+                        .and_modify(|i: &mut (u64, bool, f32)| {
+                            i.0 = a.0;
+                            i.2 = a.1;
+                        })
+                        .or_insert((a.0, false, a.1));
+                    return;
                 }
-                if r.is_disconnected() {
-                    progress.entry(name.to_string()).and_modify(|i| i.1 = true);
-                }
-            });
+                cloned.entry(name.to_string()).and_modify(|i| {
+                    i.1 = true;
+                    i.2 = a.1;
+                });
+            }
+            if r.is_disconnected() {
+                cloned.entry(name.to_string()).and_modify(|i| i.1 = true);
+            }
+        });
+        if demise.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
         }
     });
 
@@ -143,25 +143,23 @@ fn run_tui(
     stdout().execute(EnterAlternateScreen).unwrap();
 
     while !dies.load(std::sync::atomic::Ordering::Relaxed) {
-        if progress.read().unwrap().iter().all(|i| i.value().1) && !progress.read().unwrap().is_empty() {
-            break;
-        }
         terminal
             .draw(|f| {
                 draw_ui(f, &progress);
             })
             .unwrap();
+        if dies.load(std::sync::atomic::Ordering::Relaxed) {
+            break;
+        }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
-
     disable_raw_mode().unwrap();
     stdout().execute(LeaveAlternateScreen).unwrap();
 
     Ok(())
 }
 
-fn draw_ui(frame: &mut Frame, progress: &Arc<RwLock<DashMap<String, (u64, bool, f64)>>>) {
-    let progress = progress.read().unwrap();
+fn draw_ui(frame: &mut Frame, progress: &Arc<DashMap<String, (u64, bool, f32)>>) {
     match progress.len() {
         0 => {
             let paragraph = Paragraph::new("Initializing")
@@ -193,7 +191,11 @@ fn draw_ui(frame: &mut Frame, progress: &Arc<RwLock<DashMap<String, (u64, bool, 
                     prog.0,
                     {
                         if prog.1 {
-                            "Done"
+                            if prog.0 != HARD_LIMIT as u64 {
+                                "Timed out"
+                            } else {
+                                "Done"
+                            }
                         } else {
                             "Running"
                         }
@@ -206,7 +208,10 @@ fn draw_ui(frame: &mut Frame, progress: &Arc<RwLock<DashMap<String, (u64, bool, 
                         .borders(Borders::ALL)
                         .title(format!("#{} ", i + 1) + test_name)
                         .border_style(match prog.1 {
-                            true => Color::Green,
+                            true => match prog.0 as usize {
+                                HARD_LIMIT => Color::Green,
+                                _ => Color::Red,
+                            },
                             false => Color::Cyan,
                         }),
                 );
@@ -230,7 +235,7 @@ fn draw_ui(frame: &mut Frame, progress: &Arc<RwLock<DashMap<String, (u64, bool, 
     }
 }
 
-fn test(call: Arc<dyn Fn(u64) -> u64 + Send + Sync>, tx: flume::Sender<(u64, f64)>) {
+fn test(call: Arc<dyn Fn(u64) -> u64 + Send + Sync>, tx: flume::Sender<(u64, f32)>) {
     rayon::spawn(move || {
         let mut x = 1;
         let mut previous_fns = 0.0;
@@ -242,15 +247,19 @@ fn test(call: Arc<dyn Fn(u64) -> u64 + Send + Sync>, tx: flume::Sender<(u64, f64
             if duration > TIMEOUT {
                 break;
             }
-            previous_fns = 1.0 / duration as f64;
+            previous_fns = 1.0 / duration;
             tx.send((x, previous_fns)).expect("Failed to send data");
             x += 1;
+            if x > HARD_LIMIT as u64 {
+                break;
+            }
         }
         tx.send((0, previous_fns))
             .expect("Failed to send final progress"); // mark as done
     });
 }
 
+#[allow(dead_code)]
 fn fib_normal_gpu_wrapper() -> impl Fn(u64) -> u64 + 'static {
     let pro_que = PRO_QUE.clone();
     move |i: u64| {
@@ -449,10 +458,21 @@ fn fib_st_matrix_expo(mut n: u64) -> u64 {
     fib.0
 }
 
+/// credit to [froststare](https://github.com/camblomquist)
+fn fib_st_successor(n: u64) -> u64 {
+    std::iter::successors(Some([0, 1]), |&[n_0, n_1]| Some([n_1, n_0 + n_1]))
+        .flatten()
+        .step_by(2)
+        .nth(n as usize)
+        .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{
-        fib_linear_gpu_wrapper, fib_matrix_expo_gpu_wrapper, fib_matrix_gpu_wrapper, fib_st_linear, fib_st_matrix, fib_st_matrix_expo, fib_st_memo_hashmap, fib_st_memo_vec, fib_st_normal
+        fib_linear_gpu_wrapper, fib_matrix_expo_gpu_wrapper, fib_matrix_gpu_wrapper, fib_st_linear,
+        fib_st_matrix, fib_st_matrix_expo, fib_st_memo_hashmap, fib_st_memo_vec, fib_st_normal,
+        fib_st_successor,
     };
 
     const FIB: u64 = 40;
@@ -503,5 +523,10 @@ mod tests {
     #[test]
     fn test_gpu_matrix_expo() {
         assert_eq!(fib_matrix_expo_gpu_wrapper()(FIB), TARGET_VALUE)
+    }
+
+    #[test]
+    fn test_froststare() {
+        assert_eq!(fib_st_successor(FIB), TARGET_VALUE)
     }
 }
