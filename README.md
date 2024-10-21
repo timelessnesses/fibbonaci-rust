@@ -17,4 +17,6 @@ just very fast fibbonaci functions (TC: Time Complexity, SC: Space Complexity)
 
 ## note
 
-`fib_gpu_matrix` and `fib_gpu_matrix_expo` seems to struggles and hiccup from time to time while `fib_gpu_linear` is actually has stable generation rate and doesn't hiccup.
+`fib_gpu_matrix` and `fib_gpu_matrix_expo` seems to struggles and hiccup from time to time while `fib_gpu_linear` is actually has stable generation rate and doesn't hiccup.  
+exit test early with `q` key or `esc` key  
+sort by fibbonaci per sec (default) with `s` and press again for sort by count per sec

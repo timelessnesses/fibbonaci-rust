@@ -17,6 +17,7 @@ use ratatui::Frame;
 use ratatui::Terminal;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
+use rayon::slice::ParallelSliceMut;
 use std::collections::HashMap;
 use std::io::stdout;
 use std::ops::Mul;
@@ -42,10 +43,33 @@ const HARD_LIMIT: usize = 1_000_000;
 fn main() {
     let dies = Arc::new(AtomicBool::new(false));
     let cloned_death = Arc::clone(&dies);
-    ctrlc::set_handler(move || {
-        cloned_death.store(true, std::sync::atomic::Ordering::Relaxed);
-    })
-    .expect("Failed to set CTRL C handler");
+
+    // false is FPS true is CPS
+    let sort_by_what = Arc::new(AtomicBool::new(false));
+    let cloned_sbw = Arc::clone(&sort_by_what);
+
+    rayon::spawn(move || {
+        loop {
+            match crossterm::event::read() {
+                Ok(a) => {
+                    match a {
+                        crossterm::event::Event::Key(k) => {
+                            if k.code == crossterm::event::KeyCode::Char('q') || k.code == crossterm::event::KeyCode::Esc {
+                                cloned_death.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            if k.code == crossterm::event::KeyCode::Char('s') {
+                                cloned_sbw.store(!cloned_sbw.load(std::sync::atomic::Ordering::Relaxed), std::sync::atomic::Ordering::Relaxed);
+                            }
+                        },
+                        _ => {}
+                    }
+                },
+                Err(_) => {
+                    cloned_death.store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+    });
     let mut funcs: HashMap<String, Arc<dyn Fn(u64) -> u64 + Send + Sync>> = HashMap::new();
     funcs.insert(
         "test_singlethreaded_normal".to_string(),
@@ -100,12 +124,13 @@ fn main() {
         test(func.clone(), sender);
         h.insert(name.clone(), receiver);
     }
-    run_tui(h, dies).unwrap();
+    run_tui(h, dies, sort_by_what).unwrap();
 }
 
 fn run_tui(
     tests: HashMap<String, flume::Receiver<(u64, f32)>>,
     dies: Arc<AtomicBool>,
+    sbw: Arc<AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
     let progress = Arc::new(DashMap::new());
@@ -145,12 +170,9 @@ fn run_tui(
     while !dies.load(std::sync::atomic::Ordering::Relaxed) {
         terminal
             .draw(|f| {
-                draw_ui(f, &progress);
+                draw_ui(f, &progress, &sbw);
             })
             .unwrap();
-        if dies.load(std::sync::atomic::Ordering::Relaxed) {
-            break;
-        }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     disable_raw_mode().unwrap();
@@ -159,7 +181,7 @@ fn run_tui(
     Ok(())
 }
 
-fn draw_ui(frame: &mut Frame, progress: &Arc<DashMap<String, (u64, bool, f32)>>) {
+fn draw_ui(frame: &mut Frame, progress: &Arc<DashMap<String, (u64, bool, f32)>>, sbw: &Arc<AtomicBool>) {
     match progress.len() {
         0 => {
             let paragraph = Paragraph::new("Initializing")
@@ -173,7 +195,13 @@ fn draw_ui(frame: &mut Frame, progress: &Arc<DashMap<String, (u64, bool, f32)>>)
         }
         _ => {
             let mut sorted_progress: Vec<_> = progress.iter().collect();
-            sorted_progress.sort_by(|a, b| b.value().2.partial_cmp(&a.value().2).unwrap());
+            sorted_progress.par_sort_by(|a, b| {
+                if sbw.load(std::sync::atomic::Ordering::Relaxed) {
+                    b.value().0.partial_cmp(&a.value().0).unwrap()
+                } else {
+                    b.value().2.partial_cmp(&a.value().2).unwrap()
+                }
+            });
 
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -220,7 +248,7 @@ fn draw_ui(frame: &mut Frame, progress: &Arc<DashMap<String, (u64, bool, f32)>>)
             }
 
             let cache_stat = Paragraph::new(format!(
-                "CACHE Hashmap Size is currently: {} megabytes\nCACHE Vec Size is currently: {} megabytes\n\nTimeout is: {} seconds",
+                "CACHE Hashmap Size is currently: {} megabytes\nCACHE Vec Size is currently: {} megabytes\nTimeout is: {} seconds",
                 CACHE_H.deep_size_of() as f32 / 1_048_576_f32,
                 CACHE_V.deep_size_of() as f32 / 1_048_576_f32,
                 TIMEOUT
@@ -228,7 +256,7 @@ fn draw_ui(frame: &mut Frame, progress: &Arc<DashMap<String, (u64, bool, f32)>>)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Memory status"),
+                    .title("Status"),
             );
             frame.render_widget(cache_stat, *chunks.last().unwrap());
         }
@@ -248,14 +276,18 @@ fn test(call: Arc<dyn Fn(u64) -> u64 + Send + Sync>, tx: flume::Sender<(u64, f32
                 break;
             }
             previous_fns = 1.0 / duration;
-            tx.send((x, previous_fns)).expect("Failed to send data");
+            match tx.send((x, previous_fns)) {
+                Ok(_) => {},
+                Err(_) => {
+                    break;
+                }
+            }
             x += 1;
             if x > HARD_LIMIT as u64 {
                 break;
             }
         }
-        tx.send((0, previous_fns))
-            .expect("Failed to send final progress"); // mark as done
+        let _ = tx.send((0, previous_fns)); // mark as done
     });
 }
 
